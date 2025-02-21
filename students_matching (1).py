@@ -28,6 +28,9 @@ class StudentsMatching:
         self.reserve_size = None
         self.sorted_students = None
         self.unmatched_students = None
+        self.prof_status = None
+        self.a = 0
+        self.free_st = []
         
         self.profiles_matches = {prof: [] for prof in range(self.num_profiles)}
         self.student_matches = {student: None for student in range(self.num_students)}
@@ -98,11 +101,12 @@ class StudentsMatching:
     
     def fill_reserve(self):
         self.reserve_size = self.calculate_reserve_size()
-        poor_students = self.data_s[self.data_s['preferences'].apply(lambda x: not x)].shape[0]
-        if poor_students > self.reserve_size:
-            reserve_students = self.sorted_students[-poor_students:]
+        indifferent_students = self.data_s[self.data_s['preferences'].apply(lambda x: not x)]
+        indifferent_students_size = self.data_s[self.data_s['preferences'].apply(lambda x: not x)].shape[0]
+        if indifferent_students_size >= self.reserve_size:
+            reserve_students = self.sorted_students[-indifferent_students_size:]
         else:
-            reserve_students = self.sorted_students[-self.reserve_size:]
+            reserve_students = self.sorted_students[-indifferent_students_size:] + [s for s in self.sorted_students if s not in indifferent_students][-(self.reserve_size-len(indifferent_students)):]
         return reserve_students
     
     def gale_shapley(self, data):
@@ -137,8 +141,8 @@ class StudentsMatching:
                 free_students.pop(0)
         self.unmatched_students = [s for s in range(self.num_students) if self.student_matches[s] is None]
            
-    def gale_shapley_short(self):
-        free_students = [s for s in self.sorted_students if s not in self.reserve_students]
+    def gale_shapley_short(self, data):
+        free_students = [s for s in data if s not in self.reserve_students]
         proposed = {student: 0 for student in range(self.num_students)}
         while free_students:
             student = free_students[0]
@@ -157,3 +161,143 @@ class StudentsMatching:
             else:
                 free_students.pop(0)
         self.unmatched_students = [s for s in range(self.num_students) if self.student_matches[s] is None]
+        
+    def gale_shapley_redistribution(self, data):
+        free_students = [s for s in data if s not in self.reserve_students]  
+        proposed = {student: 0 for student in range(self.num_students)}
+        while free_students:
+            student = free_students[0]
+            student_pref = self.data_s.loc[student, 'preferences']
+            prof_index = proposed[student]
+            if prof_index < len(student_pref):  
+                prof = student_pref[prof_index]
+                proposed[student] += 1
+                if self.data_p['quota'][prof] > 0:
+                    self.profiles_matches[prof].append(student)
+                    self.student_matches[student] = prof
+                    free_students.pop(0)
+                    self.data_p['quota'][prof] -= 1
+                    if prof in self.mandatory_profiles and self.reserve_students:
+                        student_from_reserve = self.reserve_students.pop(-1)
+                        free_students.append(student_from_reserve)
+                else:
+                    current_student = self.profiles_matches[prof][-1]
+                    prof_pref = self.data_p['preferences'][prof]
+                    if prof_pref.index(student) < prof_pref.index(current_student):
+                        self.profiles_matches[prof].pop()
+                        self.profiles_matches[prof].append(student)
+                        self.profiles_matches[prof].sort(key=prof_pref.index)
+                        self.student_matches[student] = prof
+                        self.student_matches[current_student] = None
+                        free_students.pop(0)
+                        free_students.append(current_student)
+            else:
+                free_students.pop(0)
+        self.unmatched_students = [s for s in range(self.num_students) if self.student_matches[s] is None]
+        
+    def calculate_prof_status(self):
+        # Считаем изначально укомплектованные профили и необходимое число студентов
+        self.prof_status = [None for item in range(self.data_p.shape[0])]
+        sum_to_add = 0
+
+        for prof, matched_students in self.profiles_matches.items():
+            max_size = self.data_p.loc[prof, 'max_group_size']
+            min_size = self.data_p.loc[prof, 'min_group_size']
+
+            full_groups = len(matched_students) // max_size
+            small_groups = len(matched_students) // min_size 
+
+            if (small_groups == full_groups) and (len(matched_students) % max_size != 0):
+                self.prof_status[prof] = 0
+                students_to_add = min_size - len(matched_students) % min_size
+                sum_to_add += students_to_add
+            else:
+                self.prof_status[prof] = 1
+            
+            if (prof in self.mandatory_profiles) and (small_groups < self.data_p.loc[prof, 'min_num_groups']):
+                sum_to_add += (self.data_p.loc[prof, 'min_num_groups'] - small_groups - 1) * min_size + (min_size - len(matched_students) % min_size)
+
+        # Обновляем значение a
+        self.a = sum_to_add - len(self.reserve_students) - len(self.unmatched_students)
+        
+    def preparing_for_redistribution(self):
+        current_prof_status = [None for item in range(self.data_p.shape[0])]
+        a = self.a
+
+        while True:
+            if a == 0:
+                print('можно проводить распределение')
+                print(f'студенты к распределению: {self.free_st + self.unmatched_students}')
+                break
+            
+            if a < 0:
+                print('есть лишние студенты')
+                print(f'студенты к распределению: {self.free_st + self.unmatched_students}')
+                break
+                
+            # Находим худшего распределённого студента
+            result = [item for item in self.sorted_students if item not in self.unmatched_students and item not in self.free_st][-1]
+            
+            # Убираем его с профиля
+            self.profiles_matches[self.student_matches[result]].remove(result)
+            # Убираем у него сопоставление с профилем и заносим в список свободных
+            current_prof = self.student_matches[result]
+            self.student_matches[result] = None
+            self.free_st.append(result)
+            
+            # Проверяем комплектность профиля, откуда убрали студента
+            matched_students = self.profiles_matches[current_prof]
+            max_size = self.data_p.loc[current_prof, 'max_group_size']
+            min_size = self.data_p.loc[current_prof, 'min_group_size']
+            
+            full_groups = len(matched_students) // max_size
+            small_groups = len(matched_students) // min_size 
+            
+            if (small_groups == full_groups) and (len(matched_students) % max_size != 0):
+                current_prof_status[current_prof] = 0
+            else:
+                current_prof_status[current_prof] = 1
+
+            # Обрабатываем, если профиль обязательный, но студентов на нём достаточно
+            if (current_prof in self.mandatory_profiles) and (len(matched_students) >= self.data_p.loc[current_prof, 'min_num_groups'] * min_size):
+                if current_prof_status[current_prof] == 1:
+                    if self.prof_status[current_prof] == 1:
+                        a -= 1
+                    else:
+                        a -= (small_groups + 1) * min_size - len(matched_students)
+                
+            # Обрабатываем, если профиль необязательный
+            if current_prof not in self.mandatory_profiles:
+                if current_prof_status[current_prof] == 1:
+                    if self.prof_status[current_prof] == 1:
+                        a -= 1
+                    else:
+                        a -= (small_groups + 1) * min_size - len(matched_students)
+            # В остальных случаях а не меняется, поэтому ничего не делаем
+
+        for prof, matched_students in self.profiles_matches.items():
+            max_size = self.data_p.loc[prof, 'max_group_size']
+            min_size = self.data_p.loc[prof, 'min_group_size']
+            if len(matched_students) > 0:
+                full_groups = len(matched_students) // max_size
+                small_groups = len(matched_students) // min_size
+                if len(matched_students) % max_size == 0:
+                    # Обновляем квоту
+                    self.data_p.loc[prof, 'quota'] = 0
+                elif small_groups == full_groups:
+                    students_to_add = min_size - len(matched_students) % min_size
+                    # Обновляем квоту
+                    self.data_p.loc[prof, 'quota'] = students_to_add
+                else:
+                    # Обновляем квоту
+                    self.data_p.loc[prof, 'quota'] = 0
+       
+    def random_distribution(self):
+        for student in self.unmatched_students[:]:
+            self.unmatched_students.remove(student)
+            available_profiles = [prof for prof in range(self.num_profiles) if self.data_p.loc[prof, 'quota'] > 0]
+            if available_profiles:  # Если есть доступные профили
+                prof = random.choice(available_profiles)  # Случайный профиль
+                self.profiles_matches[prof].append(student)  # Записываем студента на профиль
+                self.student_matches[student] = prof  # Обновляем сопоставление студента
+                self.data_p.loc[prof, 'quota'] -= 1  # Обновляем квоту профиля
