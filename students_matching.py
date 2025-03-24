@@ -126,7 +126,7 @@ class StudentsMatching:
                     self.student_matches[student] = prof
                     free_students.pop(0)
                     if prof in self.mandatory_profiles and self.reserve_students and len(self.profiles_matches[prof]) < self.data_p['min_quota'][prof]:
-                        student_from_reserve = self.reserve_students.pop(-1)
+                        student_from_reserve = self.reserve_students.pop()
                         free_students.append(student_from_reserve)
                 else:
                     current_student = self.profiles_matches[prof][-1]
@@ -158,7 +158,7 @@ class StudentsMatching:
                     self.student_matches[student] = prof
                     free_students.pop(0)
                     if prof in self.mandatory_profiles and self.reserve_students and len(self.profiles_matches[prof]) < self.data_p['min_quota'][prof]:
-                        student_from_reserve = self.reserve_students.pop(-1)
+                        student_from_reserve = self.reserve_students.pop()
                         free_students.append(student_from_reserve)
             else:
                 free_students.pop(0)
@@ -232,6 +232,9 @@ class StudentsMatching:
             if (small_groups == full_groups) and (len(matched_students) % max_size != 0):
                 self.prof_status[prof] = 0
                 if prof not in self.mandatory_profiles:
+                    students_to_add = min_size - len(matched_students) % min_size
+                    sum_to_add += students_to_add
+                elif (prof in self.mandatory_profiles) and (len(matched_students) >= self.data_p.loc[prof, 'min_quota']):
                     students_to_add = min_size - len(matched_students) % min_size
                     sum_to_add += students_to_add
             else:
@@ -324,3 +327,47 @@ class StudentsMatching:
                 self.data_p.loc[prof, 'quota'] -= 1  # Обновляем квоту профиля
             else:
                 self.unmatched_students.append(student)
+
+    def thresholds(self, min_threshold, max_threshold):
+        i = 0
+        while i < len(max_threshold) - 1:
+            if min_threshold[i + 1] - 1  <= max_threshold[i]:
+                min_threshold.pop(i + 1)
+                max_threshold.pop(i)
+            else:
+                i += 1
+        return min_threshold, max_threshold
+
+    def completeness_quota(self):
+        for prof, matched_students in self.profiles_matches.items():
+    
+            min_threshold = []
+            max_threshold = []
+            available_students = []
+
+            max_size = self.data_p.loc[prof, 'max_group_size']
+            min_size = self.data_p.loc[prof, 'min_group_size']
+            quota = self.data_p.loc[prof, 'quota']
+    
+            if max_size // min_size == 0:
+                print(f'Профиль {prof} всегда комплектен. Верхняя квота - {quota}')
+            else:
+                for i in range(1, self.data_p.loc[prof, 'max_num_groups'] + 1):
+                    min_threshold.append(min_size * i)
+                    max_threshold.append(max_size * i)
+            
+                min_thresholds, max_thresholds = self.thresholds(min_threshold, max_threshold)
+        
+                max_available = self.data_p.loc[prof, 'max_group_size'] * self.data_p.loc[prof, 'max_num_groups']
+        
+                for i in range(len(max_thresholds) - 1):
+                    if len(matched_students) <= max_thresholds[i]:
+                        if len(matched_students) >= min_thresholds[i+1]:
+                            max_available = max_thresholds[i+1]
+                            break
+                        else:     
+                            max_available = max_thresholds[i]
+                            break
+                print(f'на профиле {prof} студентов можно добавить  до {max_available}')
+                self.data_p.loc[prof, 'quota'] = max_available - len(matched_students)
+
