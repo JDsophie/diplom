@@ -23,9 +23,11 @@ class StudentsMatching:
         self.data_s = pd.DataFrame(index=list(range(self.num_students)))
         self.data_p = pd.DataFrame(index=list(range(self.num_profiles)))
         
+        self.mandatory_profiles = None
         self.priorities = None
         self.priorities_target = None
         self.reserve_size = None
+        self.reserve_students = None
         self.sorted_students = None
         self.indifferent_students = None
         self.unmatched_students = None
@@ -36,16 +38,8 @@ class StudentsMatching:
         self.profiles_matches = {prof: [] for prof in range(self.num_profiles)}
         self.student_matches = {student: None for student in range(self.num_students)}
 
-        self.generate_student_labels()
-        self.generate_debts()
-        self.generate_rating()
-        self.generate_profiles()
-        self.generate_student_preferences()
-        self.generate_profile_preferences()
-        
-        self.mandatory_profiles = self.calculate_mandatory_profiles()
-        self.reserve_students = self.fill_reserve()
-
+        self.generate_profiles()    
+                     
     def generate_student_labels(self):
         num_target_students = int(self.perc_of_target * self.num_students)
         self.data_s['target'] = 0
@@ -89,14 +83,13 @@ class StudentsMatching:
     def calculate_mandatory_profiles(self):
         self.priorities = Counter([x[0] for x in self.data_s['preferences'] if x])
         self.priorities_target = Counter([x[0] for x in self.data_s[self.data_s['target'] == 1]['preferences'] if x])
-        mandatory_profiles = list(set(
+        self.mandatory_profiles = list(set(
             [profile for profile, count in self.priorities.items() if count > self.first_pref] +
             [profile for profile, count in self.priorities_target.items() if count > self.first_pref_target]
         ))
-        self.data_p.loc[(self.data_p.index.isin(mandatory_profiles)) & (self.data_p['min_num_groups'] == 0), 'min_num_groups'] = 1
+        self.data_p.loc[(self.data_p.index.isin(self.mandatory_profiles)) & (self.data_p['min_num_groups'] == 0), 'min_num_groups'] = 1
         self.data_p['min_quota'] = self.data_p['min_group_size'] * self.data_p['min_num_groups']
-        num_mandatory_profiles = len(mandatory_profiles)
-        return mandatory_profiles
+        num_mandatory_profiles = len(self.mandatory_profiles)
         
     def calculate_reserve_size(self):
         return (self.data_p['min_group_size'] * self.data_p['min_num_groups']).sum() 
@@ -106,10 +99,9 @@ class StudentsMatching:
         self.indifferent_students = self.data_s[self.data_s['preferences'].apply(lambda x: not x)].index.tolist()
         indifferent_students_size = len(self.indifferent_students)
         if indifferent_students_size >= self.reserve_size:
-            reserve_students = []
+            self.reserve_students = []
         else:
-            reserve_students = [s for s in self.sorted_students if s not in self.indifferent_students][-(self.reserve_size-indifferent_students_size):]
-        return reserve_students
+            self.reserve_students = [s for s in self.sorted_students if s not in self.indifferent_students][-(self.reserve_size-indifferent_students_size):]
     
     def gale_shapley(self, data):
         free_students = [s for s in data if s not in self.reserve_students]  
@@ -370,4 +362,3 @@ class StudentsMatching:
                             break
                 print(f'на профиле {prof} студентов можно добавить  до {max_available}')
                 self.data_p.loc[prof, 'quota'] = max_available - len(matched_students)
-
